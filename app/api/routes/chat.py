@@ -1,9 +1,10 @@
 """
 Chat endpoints for Mental Health Chatbot
-Endpoint /chat/friend - Trò chuyện với chatbot đồng cảm + Context Awareness
+Endpoint /chat/friend - Trò chuyện với chatbot đồng cảm + Context Awareness + AUTH
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from app.api.deps import CurrentUser  # 🔐 Import dependency xác thực
 from sqlmodel import Session
 from sqlalchemy import create_engine
 from app.core.config import settings
@@ -65,7 +66,7 @@ class ChatResponse(BaseModel):
     
     suggested_actions: Optional[List[str]] = Field(None, description="Hành động đề xuất")
     
-    # 🔥 Context Window fields (MỚI)
+    # 🔥 Context Window fields
     context_used: bool = Field(default=False, description="Có sử dụng lịch sử để phân tích không")
     context_snippet: Optional[str] = Field(None, description="Đoạn context đã dùng (cắt ngắn)")
     
@@ -83,7 +84,7 @@ class ConversationHistory(BaseModel):
     messages: List[ChatMessage] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
-    metadata: Dict = Field(default_factory=dict)  # ✅ Tên đúng: metadata
+    metadata: Dict = Field(default_factory=dict)
 
 
 # ==================== IN-MEMORY STORAGE (Dev only) ====================
@@ -126,30 +127,18 @@ class ChatbotCore:
     def _build_context_input(self, conversation: Optional[ConversationHistory], 
                             current_message: str, 
                             context_window: int = 3) -> tuple[str, bool, Optional[str]]:
-        """
-        🔥 XÂY DỰNG INPUT CÓ CONTEXT CHO ML/NLP
-        
-        Returns:
-            tuple: (input_text, context_used, context_snippet)
-        """
+        """🔥 XÂY DỰNG INPUT CÓ CONTEXT CHO ML/NLP"""
         if not conversation or len(conversation.messages) < 2:
             return current_message, False, None
         
-        # Lấy n messages gần nhất (không tính message hiện tại)
         recent_messages = conversation.messages[-context_window:]
-        
-        # Ghép thành context: "user: ... | assistant: ... | user: ..."
         context_parts = []
         for msg in recent_messages:
             role = "bạn" if msg.role == "user" else "tôi"
             context_parts.append(f"{role}: {msg.content}")
         
         context_text = " | ".join(context_parts)
-        
-        # Ghép context + message hiện tại
         input_with_context = f"{context_text} | bạn: {current_message}"
-        
-        # Cắt snippet cho debug (max 200 chars)
         snippet = context_text[-200:] if len(context_text) > 200 else context_text
         
         return input_with_context, True, snippet
@@ -157,22 +146,18 @@ class ChatbotCore:
     def process_message(self, user_message: str, 
                        conversation: Optional[ConversationHistory] = None,
                        context: Optional[Dict] = None) -> ChatResponse:
-        """
-        Xử lý tin nhắn và tạo phản hồi thông minh CÓ CONTEXT
-        """
-        # 🔥 BUILD INPUT WITH CONTEXT
+        """Xử lý tin nhắn và tạo phản hồi thông minh CÓ CONTEXT"""
         input_for_analysis, context_used, context_snippet = self._build_context_input(
             conversation, user_message
         )
         
-        # 1. NLP Analysis (với context nếu có)
+        # 1. NLP Analysis
         sentiment_analysis = self.nlp.calculate_sentiment_score(input_for_analysis)
         
-        # 2. Intent Classification (với context nếu có)
+        # 2. Intent Classification
         intent_result = None
         if self.intent_classifier.is_trained:
             try:
-                # Predict với input đã ghép context → confidence cao hơn!
                 intent_result = self.intent_classifier.predict(input_for_analysis)
             except Exception:
                 intent_result = {'intent': 'unknown', 'confidence': 0.0}
@@ -186,20 +171,18 @@ class ChatbotCore:
         
         risk_assessment = self.risk_detector.detect_risk(user_message, risk_context)
         
-        # 4. Generate Empathetic Response (vẫn dùng user_message gốc để trả lời tự nhiên)
+        # 4. Generate Empathetic Response
         empathy_response = self.empathy.generate_empathetic_response(
-            user_message,  # ← Dùng message gốc, không dùng context
-            sentiment_analysis
+            user_message, sentiment_analysis
         )
         
-        # 5. Handle Crisis Response (ưu tiên cao nhất)
+        # 5. Handle Crisis Response
         final_response = empathy_response['response']
         if risk_assessment.level in [RiskLevel.HIGH, RiskLevel.CRITICAL]:
             crisis_msg = self.risk_detector.get_crisis_response(risk_assessment)
             if crisis_msg:
                 final_response = crisis_msg
         
-        # 6. Build response object
         conversation_id = conversation.conversation_id if conversation else str(uuid.uuid4())
         
         return ChatResponse(
@@ -217,10 +200,8 @@ class ChatbotCore:
             },
             risk_assessment=risk_assessment.to_dict(),
             suggested_actions=empathy_response.get('suggested_actions', []),
-            # 🔥 Context fields
             context_used=context_used,
             context_snippet=context_snippet,
-            # Flags
             is_crisis=risk_assessment.level in [RiskLevel.HIGH, RiskLevel.CRITICAL],
             requires_human_intervention=risk_assessment.requires_human_intervention
         )
@@ -244,17 +225,22 @@ def get_chatbot_core() -> ChatbotCore:
              description="Gửi tin nhắn và nhận phản hồi đồng cảm từ chatbot sức khỏe tâm thần")
 async def chat_with_friend(
     request: ChatRequest,
+    *,  # ✅ FIX: Thêm *, để tách positional và keyword-only params
     chatbot: ChatbotCore = Depends(get_chatbot_core),
     db: Session = Depends(get_db),
+    current_user: CurrentUser,  # ✅ OK: current_user giờ là keyword-only
 ):
-    """Endpoint chính cho chatbot"""
+    """Endpoint chính cho chatbot (đã yêu cầu xác thực)"""
+    
+    # 💡 Mẹo: Bạn có thể dùng current_user.id thay vì request.user_id
+    active_user_id = str(current_user.id)
     
     # Load hoặc tạo conversation
     conversation = None
     if request.conversation_id and request.conversation_id in _conversations:
         conversation = get_conversation(request.conversation_id)
     else:
-        conversation = create_new_conversation(request.user_id)
+        conversation = create_new_conversation(active_user_id)
         if request.conversation_id:
             conversation.conversation_id = request.conversation_id
     
@@ -302,9 +288,9 @@ async def chat_with_friend(
         risk_score=response.risk_assessment["score"],
         is_crisis=response.is_crisis,
         requires_human_intervention=response.requires_human_intervention,
-        context_used=response.context_used,  # 🔥 Lưu context info vào DB
+        context_used=response.context_used,
         context_snippet=response.context_snippet,
-        user_id=request.user_id,
+        user_id=active_user_id,  # ✅ Dùng ID từ user đã đăng nhập
     )
     
     return response

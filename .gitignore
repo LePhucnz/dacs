@@ -1,8 +1,35 @@
-__pycache__
-app.egg-info
+# Python & Cache
+__pycache__/
 *.pyc
-.mypy_cache
+*.pyo
+*.pyd
+.Python
+app.egg-info/
+.mypy_cache/
+.cache/
 .coverage
-htmlcov
-.cache
-.venv
+htmlcov/
+
+# Virtual Environments (QUAN TRỌNG)
+venv/
+.venv/
+ENV/
+
+# Environment Variables (CHỨA MẬT KHẨU & KEY BẢO MẬT)
+.env
+.env.local
+.env.production
+*.env
+
+# IDE & OS Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
