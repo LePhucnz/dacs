@@ -1,0 +1,16 @@
+{
+  "intents": [
+    "express_emotion",
+    "crisis",
+    "ask_help",
+    "greeting",
+    "gratitude",
+    "describe_problem",
+    "ask_advice",
+    "about_bot",
+    "share_story",
+    "ask_understanding"
+  ],
+  "is_trained": true,
+  "num_intents": 10
+}
